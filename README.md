@@ -1,6 +1,11 @@
 # WorldPay TRX钱包插件 商业版可以支持2000个地址以上 普通免费版本固定几个地址就可以了 支持7大主网
 只做了简单的插件开发 需要更好的插件自己写代码看官方文档
 
+
+插件目录增加文件worldpay文件上传worldpay_plugin.php
+test_webhook.php放根目录即可 然后配置到账通知
+
+
 ## 功能说明
 - 集成WorldPay Web3钱包系统
 - 支持TRX网络USDT收款

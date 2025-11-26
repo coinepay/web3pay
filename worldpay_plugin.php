@@ -1,0 +1,560 @@
+<?php
+
+class worldpay_plugin
+{
+    static public $info = [
+        'name'        => 'worldpay', //支付插件英文名称，需和目录名称一致，不能有重复
+        'showname'    => 'WorldPay TRX钱包', //支付插件显示名称
+        'author'      => 'WorldPay', //支付插件作者
+        'link'        => 'https://www.worldpay.im/', //支付插件作者链接
+        'types'       => ['usdt'], //支付插件支持的支付方式，USDT-TRC20
+        'inputs' => [ //支付插件要求传入的参数
+            'appid' => [
+                'name' => 'App ID',
+                'type' => 'input',
+                'note' => 'WorldPay分配的应用ID',
+            ],
+            'appsecret' => [
+                'name' => 'Secret Key',
+                'type' => 'input',
+                'note' => 'WorldPay分配的密钥',
+            ],
+            'appurl' => [
+                'name' => 'API地址',
+                'type' => 'input',
+                'note' => '默认: https://admin.worldpay.im/client-api',
+            ],
+        ],
+        'select' => null,
+        'note' => 'WorldPay Web3钱包系统，支持TRX网络USDT收款。需要先在WorldPay平台注册并获取API密钥。', //支付密钥填写说明
+        'bindwxmp' => false, //是否支持绑定微信公众号
+        'bindwxa' => false, //是否支持绑定微信小程序
+    ];
+
+    // 自动注册插件到数据库
+    static public function install() {
+        global $DB;
+        
+        $info = self::$info;
+        $existing = $DB->getRow("SELECT * FROM pre_plugin WHERE name='{$info['name']}'");
+        
+        if (!$existing) {
+            $DB->exec("INSERT INTO pre_plugin (name, showname, author, link, types) VALUES (?, ?, ?, ?, ?)", [
+                $info['name'],
+                $info['showname'], 
+                $info['author'],
+                $info['link'],
+                implode(',', $info['types'])
+            ]);
+        }
+    }
+
+    static public function submit(){
+        global $siteurl, $channel, $order, $ordername, $sitename;
+        
+        // 添加调试日志
+        error_log("WorldPay Plugin - submit() method called");
+        error_log("WorldPay Plugin - Trade No: " . TRADE_NO);
+        error_log("WorldPay Plugin - Channel: " . print_r($channel, true));
+        
+        // 使用固定的TRX地址，不用每次创建
+        $trx_address = "TZ7LVzNNCfxTk7vz6TwAwtBFHvWYBUVvMo";
+        
+        // 将订单号保存到订单备注中，用于回调匹配
+        global $DB;
+        $DB->exec("UPDATE pre_order SET param=:trade_no WHERE trade_no=:trade_no", [
+            ':trade_no' => TRADE_NO,
+            ':trade_no' => TRADE_NO
+        ]);
+        
+        error_log("WorldPay Plugin - Using fixed address: " . $trx_address);
+        error_log("WorldPay Plugin - Order: " . TRADE_NO);
+        
+        // 清空输出缓冲区并直接输出HTML
+        ob_clean();
+        header("Content-Type: text/html; charset=UTF-8");
+        
+        // 直接输出支付页面HTML
+        ?>
+        <!DOCTYPE html>
+        <html lang="zh-CN">
+        <head>
+            <meta charset="utf-8"/>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>TRX-USDT支付</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 20px; text-align: center; background: #f5f5f5; }
+                .container { max-width: 500px; margin: 0 auto; padding: 30px; background: white; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+                .header { margin-bottom: 30px; }
+                .amount { font-size: 28px; color: #e74c3c; margin: 20px 0; font-weight: bold; }
+                .address { background: #f8f9fa; padding: 20px; margin: 20px 0; word-break: break-all; font-family: monospace; border-radius: 8px; border: 2px solid #007bff; }
+                .qr-code { margin: 20px 0; padding: 20px; background: white; border: 1px solid #ddd; border-radius: 10px; display: inline-block; }
+                .warning { background: #fff3cd; border: 1px solid #ffeaa7; color: #856404; padding: 15px; margin: 20px 0; border-radius: 8px; }
+                button { padding: 12px 24px; margin: 10px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px; }
+                button:hover { background: #0056b3; }
+                .network-badge { background: #28a745; color: white; padding: 5px 10px; border-radius: 15px; font-size: 12px; margin-left: 10px; }
+                .status { margin-top: 20px; padding: 10px; border-radius: 5px; }
+                .status.loading { background: #d1ecf1; color: #0c5460; }
+                .status.success { background: #d4edda; color: #155724; }
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="header">
+                    <h2>🔗 TRX网络 USDT支付</h2>
+                    <p>订单号: <?php echo TRADE_NO; ?></p>
+                </div>
+                
+                <div class="amount">
+                    支付金额: <?php echo $order['money']; ?> USDT
+                    <span class="network-badge">TRC20</span>
+                </div>
+                
+                <div class="qr-code" id="qrcode"></div>
+                
+                <div class="address">
+                    <strong>🏦 收款地址:</strong><br>
+                    <div id="trx-address" style="margin-top: 10px; font-size: 14px;"><?php echo $trx_address; ?></div>
+                </div>
+                
+                <button onclick="copyAddress()">📋 复制地址</button>
+                <button onclick="checkPayment()">🔍 检查支付状态</button>
+                
+                <div class="warning">
+                    <strong>⚠️ 重要提醒:</strong><br>
+                    • 请使用 <strong>TRC20网络</strong> 转账USDT<br>
+                    • 转账金额: <strong><?php echo $order['money']; ?> USDT</strong><br>
+                    • 请勿使用交易所直接提币<br>
+                    • 转账确认后约1-3分钟到账
+                </div>
+                
+                <div id="status" class="status" style="display: none;"></div>
+            </div>
+
+            <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
+            <script>
+                // 等待页面加载完成后生成二维码
+                document.addEventListener('DOMContentLoaded', function() {
+                    const qrContainer = document.getElementById('qrcode');
+                    
+                    // 检查QRCode库是否加载成功
+                    if (typeof QRCode !== 'undefined') {
+                        QRCode.toCanvas(qrContainer, '<?php echo $trx_address; ?>', {
+                            width: 200,
+                            height: 200,
+                            colorDark: '#000000',
+                            colorLight: '#ffffff'
+                        }, function(error) {
+                            if (error) {
+                                console.error('QR码生成失败:', error);
+                                qrContainer.innerHTML = '<p style="color: red;">二维码生成失败</p>';
+                            }
+                        });
+                    } else {
+                        // 如果QRCode库加载失败，使用备用方案
+                        console.log('QRCode库未加载，使用备用方案');
+                        qrContainer.innerHTML = '<img src="https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=' + encodeURIComponent('<?php echo $trx_address; ?>') + '" alt="TRX地址二维码" style="border: 1px solid #ddd;">';
+                    }
+                });
+
+                // 复制地址
+                function copyAddress() {
+                    const address = document.getElementById('trx-address').textContent;
+                    if (navigator.clipboard) {
+                        navigator.clipboard.writeText(address).then(function() {
+                            alert('✅ 地址已复制到剪贴板');
+                        });
+                    } else {
+                        const textArea = document.createElement('textarea');
+                        textArea.value = address;
+                        document.body.appendChild(textArea);
+                        textArea.select();
+                        document.execCommand('copy');
+                        document.body.removeChild(textArea);
+                        alert('✅ 地址已复制到剪贴板');
+                    }
+                }
+
+                // 检查支付状态
+                function checkPayment() {
+                    const statusDiv = document.getElementById('status');
+                    statusDiv.style.display = 'block';
+                    statusDiv.className = 'status loading';
+                    statusDiv.innerHTML = '🔄 正在检查支付状态...';
+                    
+                    fetch('/api.php?act=order&trade_no=<?php echo TRADE_NO; ?>')
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.code === 1 && data.status === '1') {
+                                statusDiv.className = 'status success';
+                                statusDiv.innerHTML = '✅ 支付成功！正在跳转...';
+                                setTimeout(function() {
+                                    window.location.href = '<?php echo $order['return_url'] ?: '/'; ?>';
+                                }, 2000);
+                            } else {
+                                statusDiv.className = 'status';
+                                statusDiv.innerHTML = '⏳ 支付尚未完成，请确认转账后再次检查';
+                            }
+                        })
+                        .catch(error => {
+                            statusDiv.className = 'status';
+                            statusDiv.innerHTML = '❌ 检查失败，请稍后重试';
+                        });
+                }
+
+                // 自动检查支付状态（每10秒）
+                setInterval(function() {
+                    fetch('/api.php?act=order&trade_no=<?php echo TRADE_NO; ?>')
+                        .then(response => response.json())
+                        .then(data => {
+                            if (data.code === 1 && data.status === '1') {
+                                const statusDiv = document.getElementById('status');
+                                statusDiv.style.display = 'block';
+                                statusDiv.className = 'status success';
+                                statusDiv.innerHTML = '✅ 支付成功！正在跳转...';
+                                setTimeout(function() {
+                                    window.location.href = '<?php echo $order['return_url'] ?: '/'; ?>';
+                                }, 2000);
+                            }
+                        });
+                }, 10000);
+            </script>
+        </body>
+        </html>
+        <?php
+        exit(0);
+        
+        /*
+        // 原来的API调用代码（暂时注释）
+        try {
+            // 创建TRX钱包地址
+            $walletData = self::createTRXWallet();
+            
+            if (!$walletData || !isset($walletData['address'])) {
+                throw new Exception('创建钱包地址失败');
+            }
+            
+            $trx_address = $walletData['address'];
+            
+            // 将钱包地址保存到订单备注中，用于后续回调匹配
+            global $DB;
+            $DB->exec("UPDATE pre_order SET param=:address WHERE trade_no=:trade_no", [
+                ':address' => $trx_address,
+                ':trade_no' => TRADE_NO
+            ]);
+            
+            // 记录调试信息
+            error_log("WorldPay Plugin - TRX Address: " . $trx_address);
+            error_log("WorldPay Plugin - Returning page result");
+            
+            // 返回支付页面，显示TRX地址和二维码
+            return [
+                'type' => 'page',
+                'page' => 'worldpay_test',
+                'data' => ['code_url' => $trx_address]
+            ];
+            
+        } catch (Exception $e) {
+            error_log("WorldPay Plugin - Error: " . $e->getMessage());
+            return [
+                'type' => 'error',
+                'msg' => '创建支付地址失败: ' . $e->getMessage()
+            ];
+        }
+        */
+    }
+
+    static public function notify(){
+        global $DB, $channel, $order, $conf;
+        
+        // 记录调试信息
+        error_log("WorldPay Webhook - notify() called");
+        error_log("WorldPay Webhook - Headers: " . json_encode(getallheaders()));
+        
+        // 获取Webhook数据
+        $input = file_get_contents('php://input');
+        error_log("WorldPay Webhook - Raw input: " . $input);
+        
+        $data = json_decode($input, true);
+        
+        if (!$data) {
+            error_log("WorldPay Webhook - Invalid JSON data");
+            http_response_code(400);
+            echo 'INVALID_JSON';
+            exit;
+        }
+        
+        error_log("WorldPay Webhook - Parsed data: " . json_encode($data));
+        
+        // 根据地址先查找订单，获取对应的通道配置
+        if (!isset($data['walletAddress'])) {
+            error_log("WorldPay Webhook - No walletAddress in data");
+            http_response_code(400);
+            echo 'NO_ADDRESS';
+            exit;
+        }
+        
+        $address = $data['walletAddress'];
+        error_log("WorldPay Webhook - Looking for address: " . $address);
+        
+        $order_info = $DB->getRow("SELECT * FROM pre_order WHERE param=:address AND status=0", [
+            ':address' => $address
+        ]);
+        
+        if (!$order_info) {
+            error_log("WorldPay Webhook - No order found for address: " . $address);
+            http_response_code(404);
+            echo 'ORDER_NOT_FOUND';
+            exit;
+        }
+        
+        error_log("WorldPay Webhook - Found order: " . $order_info['trade_no']);
+        
+        // 获取通道配置信息
+        $channel = \lib\Channel::get($order_info['channel']);
+        if (!$channel) {
+            error_log("WorldPay Webhook - No channel found");
+            http_response_code(500);
+            echo 'CHANNEL_ERROR';
+            exit;
+        }
+        
+        // 验证签名
+        $signature = $_SERVER['HTTP_X_WEBHOOK_SIGNATURE'] ?? '';
+        error_log("WorldPay Webhook - Signature: " . $signature);
+        
+        if (!self::verifyWebhookSignature($input, $signature)) {
+            error_log("WorldPay Webhook - Signature verification failed");
+            http_response_code(401);
+            echo 'INVALID_SIGNATURE';
+            exit;
+        }
+        
+        // 处理入账通知
+        if ($data['networkType'] === 'tron' && $data['status'] === 'confirmed') {
+            $amount = $data['amountReadable'];
+            $tokenType = strtoupper($data['tokenType']);
+            $txHash = $data['transactionHash'];
+            
+            error_log("WorldPay Webhook - Processing deposit: {$amount} {$tokenType}, TX: {$txHash}");
+            
+            // 验证金额和币种
+            if ($tokenType === 'USDT' && floatval($amount) >= floatval($order_info['money'])) {
+                // 标记订单为已支付
+                $DB->exec("UPDATE pre_order SET status=1, endtime=NOW(), api_trade_no=:txhash WHERE trade_no=:trade_no", [
+                    ':txhash' => $txHash,
+                    ':trade_no' => $order_info['trade_no']
+                ]);
+                
+                // 更新商户余额
+                $rate = floatval($order_info['money']) * (1 - floatval($conf['settle_rate']) / 100);
+                $DB->exec("UPDATE pre_user SET money=money+:money WHERE uid=:uid", [
+                    ':money' => $rate,
+                    ':uid' => $order_info['uid']
+                ]);
+                
+                // 发送异步通知给商户
+                if ($order_info['notify_url']) {
+                    self::sendNotifyToMerchant($order_info);
+                }
+                
+                error_log("WorldPay Webhook - Payment processed successfully");
+                
+                // 直接输出成功响应给WorldPay
+                http_response_code(200);
+                echo 'OK';
+                exit;
+            } else {
+                error_log("WorldPay Webhook - Amount or token type mismatch. Expected: {$order_info['money']} USDT, Got: {$amount} {$tokenType}");
+            }
+        } else {
+            error_log("WorldPay Webhook - Not a TRON USDT deposit: " . json_encode($data));
+        }
+        
+        // 返回失败响应
+        error_log("WorldPay Webhook - Processing failed");
+        http_response_code(400);
+        echo 'FAIL';
+        exit;
+    }
+
+    /**
+     * 创建TRX钱包地址
+     */
+    static private function createTRXWallet() {
+        global $channel;
+        
+        $appId = $channel['appid'];
+        $secretKey = $channel['appsecret'];
+        $apiUrl = $channel['appurl'] ?: 'https://admin.worldpay.im/client-api';
+        
+        $timestamp = (string)(time() * 1000); // 毫秒时间戳，转为字符串
+        $nonce = self::generateNonce();
+        
+        // 构建请求参数（包含请求体参数）
+        $params = [
+            'networkType' => 'TRON',
+            'timestamp' => $timestamp,
+            'nonce' => $nonce
+        ];
+        
+        // 生成签名
+        $signature = self::generateSignature($params, $secretKey);
+        
+        // 构建请求头
+        $headers = [
+            'Content-Type: application/json',
+            'x-app-id: ' . $appId,
+            'x-timestamp: ' . $timestamp,
+            'x-nonce: ' . $nonce,
+            'x-signature: ' . $signature
+        ];
+        
+        // 发送请求
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $apiUrl . '/wallets');
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['networkType' => 'TRON']));
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 30);
+        
+        $response = curl_exec($ch);
+        $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+        
+        // 记录调试信息
+        error_log("WorldPay API Request - URL: " . $apiUrl . '/wallets');
+        error_log("WorldPay API Request - Headers: " . json_encode($headers));
+        error_log("WorldPay API Request - Body: " . json_encode(['network' => 'TRON']));
+        error_log("WorldPay API Response - HTTP Code: " . $httpCode);
+        error_log("WorldPay API Response - Body: " . $response);
+        
+        if ($curlError) {
+            throw new Exception('CURL错误: ' . $curlError);
+        }
+        
+        if ($httpCode !== 200 && $httpCode !== 201) {
+            $errorMsg = 'API请求失败: HTTP ' . $httpCode;
+            if ($response) {
+                $errorData = json_decode($response, true);
+                if ($errorData && isset($errorData['message'])) {
+                    $errorMsg .= ' - ' . $errorData['message'];
+                }
+            }
+            throw new Exception($errorMsg);
+        }
+        
+        $result = json_decode($response, true);
+        
+        if (!$result) {
+            throw new Exception('创建钱包失败: 无法解析响应数据 - ' . $response);
+        }
+        
+        // 检查是否有错误信息
+        if (isset($result['code']) && $result['code'] !== 200) {
+            throw new Exception('创建钱包失败: ' . ($result['message'] ?? 'API返回错误'));
+        }
+        
+        // 检查是否有钱包地址数据
+        if (isset($result['wallets']) && is_array($result['wallets']) && count($result['wallets']) > 0) {
+            // 返回第一个钱包地址信息
+            return $result['wallets'][0];
+        } elseif (isset($result['data']) && is_array($result['data']) && count($result['data']) > 0) {
+            // 备用：检查data字段
+            return $result['data'][0];
+        } elseif (isset($result['address'])) {
+            // 直接返回地址信息
+            return ['address' => $result['address']];
+        } else {
+            throw new Exception('创建钱包失败: 响应中未找到钱包地址 - ' . $response);
+        }
+    }
+
+    /**
+     * 生成签名
+     */
+    static private function generateSignature($params, $secretKey) {
+        // 按键名排序
+        ksort($params);
+        
+        // 构建签名字符串
+        $canonicalString = '';
+        foreach ($params as $key => $value) {
+            $canonicalString .= $key . '=' . $value . '&';
+        }
+        $canonicalString = rtrim($canonicalString, '&');
+        
+        // 计算HMAC-SHA256
+        return hash_hmac('sha256', $canonicalString, $secretKey);
+    }
+
+    /**
+     * 验证Webhook签名
+     */
+    static private function verifyWebhookSignature($payload, $signature) {
+        global $channel;
+        
+        $secretKey = $channel['appsecret'];
+        $expectedSignature = hash_hmac('sha256', $payload, $secretKey);
+        
+        return hash_equals($expectedSignature, $signature);
+    }
+
+    /**
+     * 生成随机字符串
+     */
+    static private function generateNonce() {
+        return bin2hex(random_bytes(16));
+    }
+
+    /**
+     * 发送通知给商户
+     */
+    static private function sendNotifyToMerchant($order) {
+        global $DB;
+        
+        $notify_data = [
+            'pid' => $order['uid'],
+            'trade_no' => $order['trade_no'],
+            'out_trade_no' => $order['out_trade_no'],
+            'type' => $order['type'],
+            'name' => $order['name'],
+            'money' => $order['money'],
+            'trade_status' => 'TRADE_SUCCESS'
+        ];
+        
+        // 获取商户密钥生成签名
+        $userrow = $DB->getRow("SELECT `key` FROM pre_user WHERE uid=:uid", [':uid' => $order['uid']]);
+        if ($userrow) {
+            // 按照系统标准生成签名
+            ksort($notify_data);
+            $sign_str = '';
+            foreach ($notify_data as $key => $value) {
+                $sign_str .= $key . '=' . $value . '&';
+            }
+            $sign_str .= 'key=' . $userrow['key'];
+            $notify_data['sign'] = md5($sign_str);
+            
+            // 异步发送通知
+            self::sendAsyncNotify($order['notify_url'], $notify_data);
+        }
+    }
+
+    /**
+     * 异步发送通知
+     */
+    static private function sendAsyncNotify($url, $data) {
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+        curl_exec($ch);
+        curl_close($ch);
+    }
+}
